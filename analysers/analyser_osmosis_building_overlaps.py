@@ -30,6 +30,8 @@ SELECT
     ways.linestring,
     ways.tags->'building' AS building,
     NOT ways.tags?'wall' OR ways.tags->'wall' != 'no' AS wall,
+    ways.tags?'source' AND position('cadastre' in ways.tags->'source') >= 1 AS cadastre,
+    ways.nodes,
     array_length(ways.nodes, 1) AS nodes_length,
     ST_MakePolygon(ways.linestring) AS polygon
 FROM
@@ -163,6 +165,143 @@ ORDER BY
    b2.id
 """
 
+
+sql80 = """
+
+/**
+ * Try to detect buildings cut due to the import of 
+ * French cadastre artifacts.
+ *
+ * We look for nodes where two buildings joins together, and see
+ * if the 2 building would make a straight angle if joined, and
+ * if the actual angle the 1st building is making at this node
+ * is not square.
+ *
+ * We return buildings which have at least two nodes like this.
+ */
+
+CREATE FUNCTION mercator_angle_degree(p0 geometry, p1 geometry, p2 geometry) RETURNS real AS $$
+BEGIN
+    RETURN @degrees(
+          ST_Azimuth(ST_Transform(p0, 3785), ST_Transform(p1, 3785))
+        - ST_Azimuth(ST_Transform(p1, 3785), ST_Transform(p2, 3785)));
+END;
+$$ LANGUAGE plpgsql;
+
+
+SELECT
+  b1_id,
+  ST_AsText(ST_Point(x,y))
+FROM
+  (
+    SELECT
+      b1_id,
+      b2_id,
+      AVG(x) AS x,
+      AVG(y) AS y,
+      COUNT(join_node_id) as count_skewed_join_nodes,
+      MAX(straight_angle_diff),
+      MIN(right_angle_diff)
+    FROM
+      (
+        SELECT
+            b1_id,
+            b2_id,
+            join_node_id,
+            ST_X(join_node.geom) AS x,
+            ST_Y(join_node.geom) AS y,
+            CASE
+                WHEN b1_next_node_id = b2_next_node_id THEN
+                    mercator_angle_degree(b1_previous_node.geom,
+                                          join_node.geom,
+                                          b2_previous_node.geom)
+                WHEN b1_next_node_id = b2_previous_node_id THEN
+                    mercator_angle_degree(b1_previous_node.geom,
+                                          join_node.geom,
+                                          b2_next_node.geom)
+                WHEN b1_previous_node_id = b2_next_node_id THEN
+                    mercator_angle_degree(b1_next_node.geom,
+                                          join_node.geom,
+                                          b2_previous_node.geom)
+                WHEN b1_previous_node_id = b2_previous_node_id THEN
+                    mercator_angle_degree(b1_next_node.geom,
+                                          join_node.geom,
+                                          b2_next_node.geom)
+            END AS straight_angle_diff,
+            @(90 - @(180 - mercator_angle_degree(b1_previous_node.geom,
+                                          join_node.geom,
+                                          b1_next_node.geom)))
+                AS right_angle_diff
+        FROM
+        (
+          SELECT
+            b1.id as b1_id,
+            b2.id as b2_id,
+            b1.node_id as join_node_id,
+            b1.nodes[((b1.sequence_id + b1.nodes_length - 2) % (b1.nodes_length-1)) + 1] as b1_previous_node_id,
+            b1.nodes[((b1.sequence_id + 1)                   % (b1.nodes_length-1)) + 1] as b1_next_node_id,
+            b2.nodes[((b2.sequence_id + b2.nodes_length - 2) % (b2.nodes_length-1)) + 1] as b2_previous_node_id,
+            b2.nodes[((b2.sequence_id + 1)                   % (b2.nodes_length-1)) + 1] as b2_next_node_id
+          FROM
+          (
+            SELECT id,building,wall,nodes,nodes_length,node_id,sequence_id
+            FROM {0}buildings
+            INNER JOIN {0}way_nodes
+            ON id = way_id
+            WHERE
+              (sequence_id + 1) < nodes_length AND
+              cadastre
+          ) AS b1
+          INNER JOIN
+          (
+            SELECT id,building,wall,nodes,nodes_length,node_id,sequence_id
+            FROM {1}buildings
+            INNER JOIN {1}way_nodes
+            ON id = way_id
+            WHERE
+              (sequence_id + 1) < nodes_length AND
+              cadastre
+          ) AS b2
+          ON b1.node_id = b2.node_id
+          WHERE
+              b1.id < b2.id
+              AND
+              b1.building = b2.building
+              AND
+              b1.wall = b2.wall
+       ) AS b
+       INNER JOIN {0}nodes AS join_node
+           ON join_node.id = b.join_node_id
+       INNER JOIN {0}nodes AS b1_previous_node
+           ON b1_previous_node.id = b1_previous_node_id
+       INNER JOIN {0}nodes AS b1_next_node
+           ON b1_next_node.id = b1_next_node_id
+       INNER JOIN {1}nodes AS b2_previous_node
+           ON b2_previous_node.id = b2_previous_node_id
+       INNER JOIN {1}nodes AS b2_next_node
+           ON b2_next_node.id = b2_next_node_id
+       WHERE
+          /* Select only the "join nodes", the ones where the 2 building where not connected before (previous node)
+           * are are connected after (next node) or the opposite 
+           */
+          ((b1_previous_node_id = b2_previous_node_id) != (b1_next_node_id = b2_next_node_id))
+          OR
+          /* consider the case where next/previous are inverted for the second building: */
+          ((b1_previous_node_id = b2_next_node_id)     != (b1_next_node_id = b2_previous_node_id))
+
+     ) AS r
+     WHERE
+         straight_angle_diff < 4
+         AND
+         right_angle_diff > 5
+     GROUP BY b1_id, b2_id
+   ) AS r
+WHERE
+   count_skewed_join_nodes >= 2
+"""
+
+
+
 class Analyser_Osmosis_Building_Overlaps(Analyser_Osmosis):
 
     def __init__(self, config, logger = None):
@@ -175,12 +314,14 @@ class Analyser_Osmosis_Building_Overlaps(Analyser_Osmosis):
         self.classs_change[5] = {"item":"0", "level": 1, "tag": ["building", "fix:chair"], "desc": T_(u"Large building intersection cluster") }
         if self.FR:
             self.classs_change[6] = {"item":"1", "level": 3, "tag": ["building", "geom", "fix:chair"], "desc": T_(u"Building in parts") }
+            self.classs_change[7] = {"item":"1", "level": 3, "tag": ["building", "geom", "fix:chair"], "desc": T_(u"Building in parts") }
         self.callback30 = lambda res: {"class":2 if res[3]>res[4] else 1, "data":[self.way, self.way, self.positionAsText]}
         self.callback40 = lambda res: {"class":3, "data":[self.way, self.positionAsText]}
         self.callback50 = lambda res: {"class":4, "data":[self.way, self.way, self.positionAsText]}
         self.callback60 = lambda res: {"class":5, "data":[self.positionAsText]}
         if self.FR:
             self.callback70 = lambda res: {"class":6, "data":[self.way, self.positionAsText]}
+            self.callback80 = lambda res: {"class":7, "data":[self.way, self.positionAsText]}
 
     def analyser_osmosis_all(self):
         self.run(sql10.format(""))
@@ -194,6 +335,7 @@ class Analyser_Osmosis_Building_Overlaps(Analyser_Osmosis):
         self.run(sql60.format("", ""), self.callback60)
         if self.FR:
             self.run(sql70.format("", ""), self.callback70)
+            self.run(sql80.format("", ""), self.callback80)
 
     def analyser_osmosis_touched(self):
         self.run(sql10.format(""))
@@ -221,3 +363,6 @@ class Analyser_Osmosis_Building_Overlaps(Analyser_Osmosis):
             self.run(sql70.format("touched_", ""), self.callback70)
             self.run(sql70.format("", "touched_"), self.callback70)
             self.run(sql70.format("touched_", "touched_"), self.callback70)
+            self.run(sql80.format("touched_", ""), self.callback80)
+            self.run(sql80.format("", "touched_"), self.callback80)
+            self.run(sql80.format("touched_", "touched_"), self.callback80)
