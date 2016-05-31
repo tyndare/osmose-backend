@@ -28,7 +28,8 @@ import math
 import numpy
 import timeit
 import pickle
-from shapely.geometry.linestring    import LineString
+from fr_cadastre_segmented import get_classifier_vector
+
 
 
 sql10 = """
@@ -208,8 +209,8 @@ class Analyser_Osmosis_Building_Overlaps(Analyser_Osmosis):
         if self.FR:
             self.callback70 = lambda res: {"class":6, "data":[self.way, self.positionAsText]}
             self.callback80 = lambda res: {"class":7, "data":[self.way, self.way, self.positionAsText]} \
-                    if self.segmentedDetector.check(res[3],res[4]) else None
-            self.segmentedDetector = SegmentedDetector()
+                    if self.segmentedBuildingDetector.check(res[3],res[4]) else None
+            self.segmentedBuildingDetector = FrSegmentedBuildingDetector()
 
     def analyser_osmosis_all(self):
         self.run(sql10.format(""))
@@ -258,16 +259,14 @@ class Analyser_Osmosis_Building_Overlaps(Analyser_Osmosis):
             self.run(sql80.format("touched_", "touched_", self.config.options.get("proj")), self.callback80)
 
 
-class SegmentedDetector(object):
-    """Detector for segmented building due to French cadastre artifacts."""
+class FrSegmentedBuildingDetector(object):
+    """Detector for contiguous building that may have been segmented
+       due to France's Cadastre artifact"""
     def __init__(self):
-        self.classifier = SegmentedDetector.load_classifier()
+        self.classifier = FrSegmentedBuildingDetector.load_classifier()
     def check(self, p1, p2):
-        #Quick parse of the POLYGON((x1 y1, x2 y2, ...))" WKT string:
-        p1 = map(lambda e:map(float,e.split(" ")), p1[9:-2].split(","))
-        p2 = map(lambda e:map(float,e.split(" ")), p2[9:-2].split(","))
-        vector1 = SegmentedDetector.get_segmented_analysis_vector(p1, p2)
-        vector2 = SegmentedDetector.get_segmented_analysis_vector(p2, p1)
+        vector1 = get_classifier_vector(p1, p2);
+        vector2 = get_classifier_vector(p2, p1);
         result =  ((vector1 != None) and (self.classifier.predict(vector1) == 1).all()) or \
                 ((vector2 != None) and (self.classifier.predict(vector2) == 1).all())
         return result
@@ -279,142 +278,6 @@ class SegmentedDetector(object):
         #os.system("cd " + segmented_data_dir  +"; make -s")
         classifier = pickle.load(open(os.path.join(segmented_data_dir, "classifier.pickle")))
         return classifier
-
-    @staticmethod
-    def get_segmented_analysis_vector_from_polygons(p1, p2):
-        assert(len(p1.interiors) == 0)
-        assert(len(p2.interiors) == 0)
-        return SegmentedDetector.get_segmented_analysis_vector(p1.exterior.coords, p2.exterior.coords)
-
-    @staticmethod
-    def get_segmented_analysis_vector(way1, way2):
-        result = None
-        if (way1[-1] == way1[0]) and (way2[-1] == way2[0]):
-            external1, common, external2 = SegmentedDetector.get_external1_common_external2_ways(way1, way2)
-            if len(common)>1:
-                assert(external1[-1] == common[0])
-                assert(external2[-1] == common[0])
-                assert(common[-1] == external1[0])
-                assert(common[-1] == external2[0])
-
-                #        a-----------b-------------c
-                #        |            \            |
-                #        |             d           |
-                #  way1 ...            ...        ... way2
-                #        |               e         |
-                #        |                \        |
-                #        f-----------------g-------h
-                a = external1[-2]
-                b = common[0]
-                c = external2[-2]
-                d = common[1]
-                e = common[-2]
-                f = external1[1]
-                g = common[-1]
-                h = external2[1]
-
-                data = [ SegmentedDetector.angle_abc(a,b,c),
-                         SegmentedDetector.angle_abc(f,g,h),
-                         SegmentedDetector.angle_abc(a,b,d),
-                         SegmentedDetector.angle_abc(e,g,f),
-                         SegmentedDetector.angle_abc(c,b,d),
-                         SegmentedDetector.angle_abc(e,g,h)]
-
-                data = [angle * 180 / math.pi for angle in data]
-                data.extend([SegmentedDetector.diff_to_90(angle) for angle in data])
-
-                # Compare common length ratio
-                common_length = LineString(common).length
-                external1_length = LineString(external1).length
-                external2_length = LineString(external2).length
-                ratio1 = common_length / external1_length
-                ratio2 = common_length / external2_length
-                data.extend([ratio1 + ratio2 / 2, min(ratio1, ratio2), max(ratio1, ratio2)])
-
-                # Extended common part as they are with the cut on each side:
-                common1_extd = [a] + common + [f]
-                common2_extd = [c] + common + [h]
-                # Consider extended ways, as they would be without the cut:
-                external1_extd = [h] + external1 + [c]
-                external2_extd = [f] + external2 + [a]
-
-                external1_extd_angles, external2_extd_angles, common1_extd_angles, common2_extd_angles = \
-                    [ numpy.array([SegmentedDetector.angle_abc(nodes[i-1], nodes[i], nodes[i+1]) * 180 / math.pi for i in xrange(1, len(nodes)-1)])
-                      for nodes in external1_extd, external2_extd, common1_extd, common2_extd]
-
-                data.extend(
-                    [external1_extd_angles.mean(), external1_extd_angles.std(), external1_extd_angles.min(), external1_extd_angles.max(),
-                     external2_extd_angles.mean(), external2_extd_angles.std(), external2_extd_angles.min(), external2_extd_angles.max(),
-                     common1_extd_angles.mean() - external1_extd_angles.mean(),
-                     common1_extd_angles.std(),
-                     common1_extd_angles.min() - external1_extd_angles.min(),
-                     common1_extd_angles.max() - external1_extd_angles.max(),
-                     common2_extd_angles.mean() - external2_extd_angles.mean(),
-                     common2_extd_angles.std(),
-                     common2_extd_angles.min() - external2_extd_angles.min(),
-                     common2_extd_angles.max() - external2_extd_angles.max()])
-
-                external1_extd_angles, external2_extd_angles, common1_extd_angles, common2_extd_angles = \
-                    [numpy.array([SegmentedDetector.diff_to_90(angle) for angle in angles]) for angles in
-                        external1_extd_angles, external2_extd_angles, common1_extd_angles, common2_extd_angles ]
-
-                data.extend(
-                    [external1_extd_angles.mean(), external1_extd_angles.std(), external1_extd_angles.min(), external1_extd_angles.max(),
-                     external2_extd_angles.mean(), external2_extd_angles.std(), external2_extd_angles.min(), external2_extd_angles.max(),
-                     common1_extd_angles.mean() - external1_extd_angles.mean(),
-                     common1_extd_angles.std(),
-                     common1_extd_angles.min() - external1_extd_angles.min(),
-                     common1_extd_angles.max() - external1_extd_angles.max(),
-                     common2_extd_angles.mean() - external2_extd_angles.mean(),
-                     common2_extd_angles.std(),
-                     common2_extd_angles.min() - external2_extd_angles.min(),
-                     common2_extd_angles.max() - external2_extd_angles.max()])
-
-                result = data
-        return result
-
-    @staticmethod
-    def diff_to_90(a):
-        return abs(45-abs(45-(a%90)))
-
-
-    @staticmethod
-    def angle_abc(a,b,c):
-        v1 = numpy.array([a[0]-b[0], a[1]-b[1]])
-        v2 = numpy.array([c[0]-b[0], c[1]-b[1]])
-        d = numpy.linalg.norm(v1) * numpy.linalg.norm(v2)
-        if d == 0:
-            return 0
-        else:
-            return numpy.arccos(numpy.clip(numpy.dot(v1, v2) / d, -1.0, 1.0))
-
-    @staticmethod
-    def get_external1_common_external2_ways(way1, way2):
-        "return the part of way1 not common with way2, the common part, and the part of way2 not common with way1"
-        assert(way1[-1] == way1[0]) # closed way
-        assert(way2[-1] == way2[0]) # closed way
-        way1 = way1[:-1]
-        way2 = way2[:-1]
-        previous_i = len(way1)-1
-        for i in xrange(len(way1)):
-            if way1[previous_i] not in way2 and way1[i] in way2:
-                j = way2.index(way1[i])
-                if (way2[(j + 1) % len(way2)] == way1[previous_i]) or \
-                   (way2[(j - 1 + len(way2)) % len(way2)] == way1[(i+1) % len(way1)]):
-                    # way2 is in reverse order
-                    way2.reverse()
-                    j = way2.index(way1[i])
-                way1 = way1[i:] + way1[:i]
-                way2 = way2[j:] + way2[:j]
-                break
-            previous_i = i
-        i = 0
-        while i<min(len(way1),len(way2)) and (way1[i] == way2[i]):
-            i = i + 1
-        if i==0:
-           return way1+way1[0:1], [], way2 + way2[0:1]
-        else:
-           return way1[i-1:]+way1[0:1], way1[:i], way2[i-1:] + way2[0:1]
 
 
 class Timer():
