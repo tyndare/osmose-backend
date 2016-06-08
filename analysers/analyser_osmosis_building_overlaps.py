@@ -263,21 +263,30 @@ class FrSegmentedBuildingDetector(object):
     """Detector for contiguous building that may have been segmented
        due to France's Cadastre artifact"""
     def __init__(self):
-        self.classifier = FrSegmentedBuildingDetector.load_classifier()
+        self.classifier, self.scaler = FrSegmentedBuildingDetector.load_classifier_and_scaler()
     def check(self, p1, p2):
         vector1 = get_classifier_vector(p1, p2);
         vector2 = get_classifier_vector(p2, p1);
-        result =  ((vector1 != None) and (self.classifier.predict(vector1) == 1).all()) or \
-                ((vector2 != None) and (self.classifier.predict(vector2) == 1).all())
+        if not vector1 is None:
+            vector1 = [vector1]
+            if not self.scaler is None:
+                vector1 = self.scaler.transform(vector1)
+        if not vector2 is None:
+            vector2 = [vector2]
+            if not self.scaler is None:
+                vector2 = self.scaler.transform(vector2)
+        result =  ((not vector1 is None) and (self.classifier.predict(vector1) == 1).all()) or \
+                ((not vector2 is None) and (self.classifier.predict(vector2) == 1).all())
         return result
 
     @staticmethod
-    def load_classifier():
+    def load_classifier_and_scaler():
         #FIXME: use config instead of hardcoded path:
         segmented_data_dir="/home/osm/cadastre-housenumber/segmented_building_data"
         #os.system("cd " + segmented_data_dir  +"; make -s")
         classifier = pickle.load(open(os.path.join(segmented_data_dir, "classifier.pickle")))
-        return classifier
+        scaler = pickle.load(open(os.path.join(segmented_data_dir, "scaler.pickle")))
+        return classifier, scaler
 
 
 class Timer():

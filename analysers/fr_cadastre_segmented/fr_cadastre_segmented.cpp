@@ -4,7 +4,16 @@
 #include <stdlib.h>
 #include <assert.h>
 
-#define CLASSIFIER_VECTOR_SIZE 47
+#define CLASSIFIER_VECTOR_SIZE 46
+
+static double vector_mean[CLASSIFIER_VECTOR_SIZE] = {
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+};
+
+static double vector_scale[CLASSIFIER_VECTOR_SIZE] = {
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1
+};
+
 
 class Coords {
 public:
@@ -79,7 +88,7 @@ length(const Coords* coords, int size) {
     return length;
 }
 
-static int 
+static int
 count(const char* s, char c)
 {
   int count = 0;
@@ -87,7 +96,7 @@ count(const char* s, char c)
   return count;
 }
 
-static const char* 
+static const char*
 find(const char* s, char c) {
   while(*s && (*s != c)) s++;
   return (*s == c) ? s : NULL;
@@ -138,7 +147,7 @@ reverse(Coords* coords, int size) {
     }
 }
 
-static void 
+static void
 shift_left(Coords* coords, int size, int shift) {
     if (shift > 0) {
         Coords tmp[shift];
@@ -167,7 +176,7 @@ static int
 shift_to_common_start_and_get_common_size(
         Coords* poly1, int size1,
         Coords* poly2, int size2)
-        
+
 {
     size1 = size1 - 1; // forget the last element identical to the 1st one
     size2 = size2 - 1; // forget the last element identical to the 1st one
@@ -179,7 +188,7 @@ shift_to_common_start_and_get_common_size(
                     || (poly2[(i2-1+size2)%size2] == poly1[(i1+1)%size1]))
             {
                 reverse(poly2, size2);
-                //printf("reverse poly2\n"); 
+                //printf("reverse poly2\n");
                 //printf("poly2 = "); print(poly2, size2); printf("\n");
                 i2 = size2 - 1 - i2;
                 //printf("i1 = %d    i2 = %d\n", i1, i2);
@@ -194,7 +203,7 @@ shift_to_common_start_and_get_common_size(
         prev_i1 = i1;
     }
     int common_size = 0;
-    while((common_size < size1) && (common_size < size2) 
+    while((common_size < size1) && (common_size < size2)
             && (poly1[common_size] == poly2[common_size]))
     {
             common_size++;
@@ -210,11 +219,11 @@ angle(const Coords &a, const Coords &b, const Coords &c)
 
 static double
 diff_to_90(double a)
-{  
+{
     return fabs(45 - fabs(45 - (fmod(a, 90.0))));
 }
 
-static void 
+static void
 get_angles(Coords &p0, Coords* poly, int size, Coords &pn, double* result)
 {
     int i;
@@ -235,7 +244,7 @@ get_angles(Coords &p0, Coords* poly, int size, Coords &pn, double* result)
 
 static void
 compute_min_max_mean_std(
-        const double* values, int size, 
+        const double* values, int size,
         double *out_min, double *out_max, double *out_mean, double *out_std)
 {
     int i;
@@ -297,222 +306,231 @@ fill_classifier_vector(double* clsfr_vec, Coords* poly1, int size1, Coords* poly
     // need at leas two common nodes to consider we have
     // a segmented building
     if (common_size < 2) {
-        return 0; 
-    } else {
-        //memset(clsfr_vec, 0, sizeof(clsfr_vec[0]) * CLASSIFIER_VECTOR_SIZE);
-
-        Coords* common = poly1;
-
-        Coords* external1 = poly1 + common_size - 1;
-        int external1_size = size1 - common_size + 1;
-
-        Coords* external2 = poly2 + common_size - 1;
-        int external2_size = size2 - common_size + 1;
-
-        //          a------b------------c
-        //          |       \           |
-        //          |        d          |
-        //  poly1  ...       ...       ...  poly2
-        //          |          e        |
-        //          |           \       |
-        //          f------------g------h
-        //
-        // =>
-        //
-        //              a---b              b            b---------c
-        //              |                   \                     |
-        //              |                    d                    |
-        //  external1  ...           common  ...      external2  ...  
-        //              |                      e                  |
-        //              |                       \                 |
-        //              f---------g              g            g---h
-        //  
-        // common = [b, d, ..., e, g]
-        // external1 = [g, f, ..., a, b]
-        // external2 = [g, h, ..., c, b]
-        // 
-        Coords a = external1[external1_size-2];
-        Coords b = common[0];
-        Coords c = external2[external2_size-2];
-        Coords d = common[1]; // == poly2[1]
-        Coords e = common[common_size-2]; // == poly2[common_size-2];
-        Coords f = external1[1];
-        Coords g = common[common_size-1];
-        Coords h = external2[1];
-
-        int v=0;
-        clsfr_vec[v++] = rad2deg(angle(a,b,c));
-        clsfr_vec[v++] = rad2deg(angle(f,g,h));
-        clsfr_vec[v++] = rad2deg(angle(a,b,d));
-        clsfr_vec[v++] = rad2deg(angle(e,g,f));
-        clsfr_vec[v++] = rad2deg(angle(c,b,d));
-        clsfr_vec[v++] = rad2deg(angle(e,g,h));
-        for(i=0; i<6;i++) {
-            clsfr_vec[v++] = diff_to_90(clsfr_vec[i]);
-        }
-
-
-        // Compare common length ratio
-        double common_length = length(poly1, common_size);
-        double external1_length = length(external1, external1_size);
-        double external2_length = length(external2, external2_size);
-        double ratio1 = common_length / external1_length;
-        double ratio2 = common_length / external2_length;
-        clsfr_vec[v++] = (ratio1 + ratio2 / 2);
-        clsfr_vec[v++] = fmin(ratio1, ratio2);
-        clsfr_vec[v++] = fmax(ratio1, ratio2);
-
-
-        double common1_extd_angles[common_size];
-        double common2_extd_angles[common_size];
-        double external1_extd_angles[external1_size];
-        double external2_extd_angles[external2_size];
-        // Extended common part as they are with the cut on each side,
-        get_angles(a, common, common_size, f, common1_extd_angles);
-        get_angles(c, common, common_size, h, common2_extd_angles);
-        // Consider the external ways, as they would be without the cut:
-        get_angles(h, external1, external1_size, c, external1_extd_angles);
-        get_angles(f, external2, external2_size, a, external2_extd_angles);
-
-
-        double common1_extd_angles_min = 0;
-        double common1_extd_angles_max = 0;
-        double common1_extd_angles_mean = 0;
-        double common1_extd_angles_std = 0;
-        double common2_extd_angles_min = 0;
-        double common2_extd_angles_max = 0;
-        double common2_extd_angles_mean = 0;
-        double common2_extd_angles_std = 0;
-        double external1_extd_angles_min = 0;
-        double external1_extd_angles_max = 0;
-        double external1_extd_angles_mean = 0;
-        double external1_extd_angles_std = 0;
-        double external2_extd_angles_min = 0;
-        double external2_extd_angles_max = 0;
-        double external2_extd_angles_mean = 0;
-        double external2_extd_angles_std = 0;
-
-        compute_min_max_mean_std(
-            common1_extd_angles,
-            common_size,
-            &common1_extd_angles_min,
-            &common1_extd_angles_max,
-            &common1_extd_angles_mean,
-            &common1_extd_angles_std);
-
-
-        compute_min_max_mean_std(
-            common2_extd_angles,
-            common_size,
-            &common2_extd_angles_min,
-            &common2_extd_angles_max,
-            &common2_extd_angles_mean,
-            &common2_extd_angles_std);
-
-
-        compute_min_max_mean_std(
-            external1_extd_angles,
-            external1_size,
-            &external1_extd_angles_min,
-            &external1_extd_angles_max,
-            &external1_extd_angles_mean,
-            &external1_extd_angles_std);
-
-
-        compute_min_max_mean_std(
-            external2_extd_angles,
-            external2_size,
-            &external2_extd_angles_min,
-            &external2_extd_angles_max,
-            &external2_extd_angles_mean,
-            &external2_extd_angles_std);
-
-        clsfr_vec[v++] = external1_extd_angles_mean,
-        clsfr_vec[v++] = external1_extd_angles_std;
-        clsfr_vec[v++] = external1_extd_angles_min;
-        clsfr_vec[v++] = external1_extd_angles_max;
-        clsfr_vec[v++] = external2_extd_angles_mean;
-        clsfr_vec[v++] = external2_extd_angles_std;
-        clsfr_vec[v++] = external2_extd_angles_min;
-        clsfr_vec[v++] = external2_extd_angles_max;
-        clsfr_vec[v++] = common1_extd_angles_mean - external1_extd_angles_mean;
-        clsfr_vec[v++] = common1_extd_angles_std;
-        clsfr_vec[v++] = common1_extd_angles_min - external1_extd_angles_min;
-        clsfr_vec[v++] = common1_extd_angles_max - external1_extd_angles_max;
-        clsfr_vec[v++] = common2_extd_angles_mean - external2_extd_angles_mean;
-        clsfr_vec[v++] = common2_extd_angles_std;
-        clsfr_vec[v++] = common2_extd_angles_min - external2_extd_angles_min;
-        clsfr_vec[v++] = common2_extd_angles_max - external2_extd_angles_max;
-
-        // Do the same with diff_to_90 angles
-
-        for(i=0;i<common_size;i++) {
-            common1_extd_angles[i] = diff_to_90(common1_extd_angles[i]);
-            common2_extd_angles[i] = diff_to_90(common2_extd_angles[i]);
-        }
-        for(i=0;i<external1_size;i++) {
-            external1_extd_angles[i] = diff_to_90(external1_extd_angles[i]);
-        }
-        for(i=0;i<external2_size;i++) {
-            external2_extd_angles[i] = diff_to_90(external2_extd_angles[i]);
-        }
-
-        compute_min_max_mean_std(
-            common1_extd_angles,
-            common_size,
-            &common1_extd_angles_min,
-            &common1_extd_angles_max,
-            &common1_extd_angles_mean,
-            &common1_extd_angles_std);
-
-
-        compute_min_max_mean_std(
-            common2_extd_angles,
-            common_size,
-            &common2_extd_angles_min,
-            &common2_extd_angles_max,
-            &common2_extd_angles_mean,
-            &common2_extd_angles_std);
-
-
-        compute_min_max_mean_std(
-            external1_extd_angles,
-            external1_size,
-            &external1_extd_angles_min,
-            &external1_extd_angles_max,
-            &external1_extd_angles_mean,
-            &external1_extd_angles_std);
-
-
-        compute_min_max_mean_std(
-            external2_extd_angles,
-            external2_size,
-            &external2_extd_angles_min,
-            &external2_extd_angles_max,
-            &external2_extd_angles_mean,
-            &external2_extd_angles_std);
-
-        clsfr_vec[v++] = external1_extd_angles_mean,
-        clsfr_vec[v++] = external1_extd_angles_std;
-        clsfr_vec[v++] = external1_extd_angles_min;
-        clsfr_vec[v++] = external1_extd_angles_max;
-        clsfr_vec[v++] = external2_extd_angles_mean;
-        clsfr_vec[v++] = external2_extd_angles_std;
-        clsfr_vec[v++] = external2_extd_angles_min;
-        clsfr_vec[v++] = external2_extd_angles_max;
-        clsfr_vec[v++] = common1_extd_angles_mean - external1_extd_angles_mean;
-        clsfr_vec[v++] = common1_extd_angles_std;
-        clsfr_vec[v++] = common1_extd_angles_min - external1_extd_angles_min;
-        clsfr_vec[v++] = common1_extd_angles_max - external1_extd_angles_max;
-        clsfr_vec[v++] = common2_extd_angles_mean - external2_extd_angles_mean;
-        clsfr_vec[v++] = common2_extd_angles_std;
-        clsfr_vec[v++] = common2_extd_angles_min - external2_extd_angles_min;
-        clsfr_vec[v++] = common2_extd_angles_max - external2_extd_angles_max;
-
-        //printf("total size = %d\n", v);
-        assert(v == CLASSIFIER_VECTOR_SIZE);
-        return 1;
+        return 0;
     }
+
+    //memset(clsfr_vec, 0, sizeof(clsfr_vec[0]) * CLASSIFIER_VECTOR_SIZE);
+
+    Coords* common = poly1;
+
+    Coords* external1 = poly1 + common_size - 1;
+    int external1_size = size1 - common_size + 1;
+
+    Coords* external2 = poly2 + common_size - 1;
+    int external2_size = size2 - common_size + 1;
+
+    //          a------b------------c
+    //          |       \           |
+    //          |        d          |
+    //  poly1  ...       ...       ...  poly2
+    //          |          e        |
+    //          |           \       |
+    //          f------------g------h
+    //
+    // =>
+    //
+    //              a---b              b            b---------c
+    //              |                   \                     |
+    //              |                    d                    |
+    //  external1  ...           common  ...      external2  ...
+    //              |                      e                  |
+    //              |                       \                 |
+    //              f---------g              g            g---h
+    //
+    // common = [b, d, ..., e, g]
+    // external1 = [g, f, ..., a, b]
+    // external2 = [g, h, ..., c, b]
+    //
+    Coords a = external1[external1_size-2];
+    Coords b = common[0];
+    Coords c = external2[external2_size-2];
+    Coords d = common[1]; // == poly2[1]
+    Coords e = common[common_size-2]; // == poly2[common_size-2];
+    Coords f = external1[1];
+    Coords g = common[common_size-1];
+    Coords h = external2[1];
+
+    int v=0;
+    clsfr_vec[v++] = rad2deg(angle(a,b,c));
+    clsfr_vec[v++] = rad2deg(angle(f,g,h));
+    clsfr_vec[v++] = rad2deg(angle(a,b,d));
+    clsfr_vec[v++] = rad2deg(angle(e,g,f));
+    clsfr_vec[v++] = rad2deg(angle(c,b,d));
+    clsfr_vec[v++] = rad2deg(angle(e,g,h));
+    for(i=0; i<6;i++) {
+        clsfr_vec[v++] = diff_to_90(clsfr_vec[i]) * 4;
+    }
+
+
+    // Compare common length ratio
+    double common_length = length(poly1, common_size);
+    double external1_length = length(external1, external1_size);
+    double external2_length = length(external2, external2_size);
+    double ratio1 = common_length / external1_length;
+    double ratio2 = common_length / external2_length;
+    if ((ratio1 < .05) && (ratio2 < .05)) {
+        // Hard codded exclusion of segmented building
+        // that have a really really small common part
+        return 0;
+    }
+    clsfr_vec[v++] = atan(ratio1) / (M_PI/2) * 180;
+    clsfr_vec[v++] = atan(ratio2) / (M_PI/2) * 180;
+
+
+
+    double common1_extd_angles[common_size];
+    double common2_extd_angles[common_size];
+    double external1_extd_angles[external1_size];
+    double external2_extd_angles[external2_size];
+    // Extended common part as they are with the cut on each side,
+    get_angles(a, common, common_size, f, common1_extd_angles);
+    get_angles(c, common, common_size, h, common2_extd_angles);
+    // Consider the external ways, as they would be without the cut:
+    get_angles(h, external1, external1_size, c, external1_extd_angles);
+    get_angles(f, external2, external2_size, a, external2_extd_angles);
+
+
+    double common1_extd_angles_min = 0;
+    double common1_extd_angles_max = 0;
+    double common1_extd_angles_mean = 0;
+    double common1_extd_angles_std = 0;
+    double common2_extd_angles_min = 0;
+    double common2_extd_angles_max = 0;
+    double common2_extd_angles_mean = 0;
+    double common2_extd_angles_std = 0;
+    double external1_extd_angles_min = 0;
+    double external1_extd_angles_max = 0;
+    double external1_extd_angles_mean = 0;
+    double external1_extd_angles_std = 0;
+    double external2_extd_angles_min = 0;
+    double external2_extd_angles_max = 0;
+    double external2_extd_angles_mean = 0;
+    double external2_extd_angles_std = 0;
+
+    compute_min_max_mean_std(
+        common1_extd_angles,
+        common_size,
+        &common1_extd_angles_min,
+        &common1_extd_angles_max,
+        &common1_extd_angles_mean,
+        &common1_extd_angles_std);
+
+
+    compute_min_max_mean_std(
+        common2_extd_angles,
+        common_size,
+        &common2_extd_angles_min,
+        &common2_extd_angles_max,
+        &common2_extd_angles_mean,
+        &common2_extd_angles_std);
+
+
+    compute_min_max_mean_std(
+        external1_extd_angles,
+        external1_size,
+        &external1_extd_angles_min,
+        &external1_extd_angles_max,
+        &external1_extd_angles_mean,
+        &external1_extd_angles_std);
+
+
+    compute_min_max_mean_std(
+        external2_extd_angles,
+        external2_size,
+        &external2_extd_angles_min,
+        &external2_extd_angles_max,
+        &external2_extd_angles_mean,
+        &external2_extd_angles_std);
+
+    clsfr_vec[v++] = external1_extd_angles_mean,
+    clsfr_vec[v++] = external1_extd_angles_std;
+    clsfr_vec[v++] = external1_extd_angles_min;
+    clsfr_vec[v++] = external1_extd_angles_max;
+    clsfr_vec[v++] = external2_extd_angles_mean;
+    clsfr_vec[v++] = external2_extd_angles_std;
+    clsfr_vec[v++] = external2_extd_angles_min;
+    clsfr_vec[v++] = external2_extd_angles_max;
+    clsfr_vec[v++] = common1_extd_angles_mean - external1_extd_angles_mean;
+    clsfr_vec[v++] = common1_extd_angles_std;
+    clsfr_vec[v++] = common1_extd_angles_min - external1_extd_angles_min;
+    clsfr_vec[v++] = common1_extd_angles_max - external1_extd_angles_max;
+    clsfr_vec[v++] = common2_extd_angles_mean - external2_extd_angles_mean;
+    clsfr_vec[v++] = common2_extd_angles_std;
+    clsfr_vec[v++] = common2_extd_angles_min - external2_extd_angles_min;
+    clsfr_vec[v++] = common2_extd_angles_max - external2_extd_angles_max;
+
+    // Do the same with diff_to_90 angles
+
+    for(i=0;i<common_size;i++) {
+        common1_extd_angles[i] = diff_to_90(common1_extd_angles[i]);
+        common2_extd_angles[i] = diff_to_90(common2_extd_angles[i]);
+    }
+    for(i=0;i<external1_size;i++) {
+        external1_extd_angles[i] = diff_to_90(external1_extd_angles[i]);
+    }
+    for(i=0;i<external2_size;i++) {
+        external2_extd_angles[i] = diff_to_90(external2_extd_angles[i]);
+    }
+
+    compute_min_max_mean_std(
+        common1_extd_angles,
+        common_size,
+        &common1_extd_angles_min,
+        &common1_extd_angles_max,
+        &common1_extd_angles_mean,
+        &common1_extd_angles_std);
+
+
+    compute_min_max_mean_std(
+        common2_extd_angles,
+        common_size,
+        &common2_extd_angles_min,
+        &common2_extd_angles_max,
+        &common2_extd_angles_mean,
+        &common2_extd_angles_std);
+
+
+    compute_min_max_mean_std(
+        external1_extd_angles,
+        external1_size,
+        &external1_extd_angles_min,
+        &external1_extd_angles_max,
+        &external1_extd_angles_mean,
+        &external1_extd_angles_std);
+
+
+    compute_min_max_mean_std(
+        external2_extd_angles,
+        external2_size,
+        &external2_extd_angles_min,
+        &external2_extd_angles_max,
+        &external2_extd_angles_mean,
+        &external2_extd_angles_std);
+
+    clsfr_vec[v++] = external1_extd_angles_mean,
+    clsfr_vec[v++] = external1_extd_angles_std;
+    clsfr_vec[v++] = external1_extd_angles_min;
+    clsfr_vec[v++] = external1_extd_angles_max;
+    clsfr_vec[v++] = external2_extd_angles_mean;
+    clsfr_vec[v++] = external2_extd_angles_std;
+    clsfr_vec[v++] = external2_extd_angles_min;
+    clsfr_vec[v++] = external2_extd_angles_max;
+    clsfr_vec[v++] = common1_extd_angles_mean - external1_extd_angles_mean;
+    clsfr_vec[v++] = common1_extd_angles_std;
+    clsfr_vec[v++] = common1_extd_angles_min - external1_extd_angles_min;
+    clsfr_vec[v++] = common1_extd_angles_max - external1_extd_angles_max;
+    clsfr_vec[v++] = common2_extd_angles_mean - external2_extd_angles_mean;
+    clsfr_vec[v++] = common2_extd_angles_std;
+    clsfr_vec[v++] = common2_extd_angles_min - external2_extd_angles_min;
+    clsfr_vec[v++] = common2_extd_angles_max - external2_extd_angles_max;
+
+    //printf("total size = %d\n", v);
+    assert(v == CLASSIFIER_VECTOR_SIZE);
+
+    for(i=0;i<v;i++) {
+        clsfr_vec[i] = (clsfr_vec[i] - vector_mean[i]) * vector_scale[i];
+    }
+    return 1;
 }
 
 
@@ -530,6 +548,33 @@ double_array_to_python_list(const double* double_array, int size) {
         PyList_SET_ITEM(result_list, i, num);
   }
   return result_list;
+}
+
+
+static PyObject *
+get_vector_length(PyObject *self, PyObject *args)
+{
+  return PyInt_FromLong(CLASSIFIER_VECTOR_SIZE);
+}
+
+static PyObject *
+set_vector_mean_and_scale(PyObject *self, PyObject *args)
+{
+  PyObject * mean_list;  // arg1
+  PyObject * scale_list; // arg2
+  int i;
+  if ((!PyArg_ParseTuple(args, "oo", &mean_list, &scale_list))
+          || ( ! (PyList_Check(mean_list) && PyList_Check(scale_list)))
+          || (PyList_Size(mean_list) <  CLASSIFIER_VECTOR_SIZE)
+          || (PyList_Size(scale_list) <  CLASSIFIER_VECTOR_SIZE))
+  {
+    return NULL;
+  }
+  for(i=0; i<CLASSIFIER_VECTOR_SIZE; i++) {
+      vector_mean[i] = PyFloat_AsDouble(PyList_GetItem(mean_list, i));
+      vector_scale[i] = PyFloat_AsDouble(PyList_GetItem(scale_list, i));
+  }
+  Py_RETURN_NONE;
 }
 
 static PyObject *
@@ -558,7 +603,11 @@ get_classifier_vector(PyObject *self, PyObject *args)
 
 static PyMethodDef cMethods[] = {
   {"get_classifier_vector", get_classifier_vector, METH_VARARGS,
-   "Get statistic vector from 2 WKT Polygons representing 2 contiguous buildings pottentially wrongly segmented"},
+   "Get statistic vector from 2 WKT Polygons representing 2 contiguous buildings potentially wrongly segmented"},
+  {"set_vector_mean_and_scale", set_vector_mean_and_scale, METH_VARARGS,
+   "Set 2 vectors representing min and max values so that subsequent call to get_classifier_vector will return values in the range [0 .. 1]"},
+  {"get_vector_length", get_vector_length, METH_VARARGS,
+   "Return the length of vectors"},
   {NULL, NULL, 0, NULL}
 };
 
